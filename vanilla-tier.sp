@@ -4,6 +4,7 @@
 
 #define API_HOST    "https://vnlkz.com/api"
 #define CHAT_PREFIX "[\x0Evnlkz.com\x01]"
+#define LOAD_RETRY_DELAY 5.0
 
 #pragma newdecls required
 
@@ -36,18 +37,47 @@ enum struct UncompletedMap
 VanillaMap     g_VanillaMaps[2048];
 UncompletedMap g_UncompletedMaps[2048];
 
+Handle g_VanillaMapsRetryTimer;
+Handle g_UncompletedMapsRetryTimer;
+
 public void OnPluginStart()
 {
   RegConsoleCmd("sm_vnltier", OnVanillaTierCmd, "Show the map's vanilla tier.");
 
   LoadVanillaMaps();
   LoadUncompletedMaps();
+  ScheduleVanillaMapsRetry();
+  ScheduleUncompletedMapsRetry();
 }
 
-public void OnMapStart()
+void ScheduleVanillaMapsRetry()
 {
+  if (g_VanillaMapsRetryTimer == null)
+  {
+    g_VanillaMapsRetryTimer = CreateTimer(LOAD_RETRY_DELAY, Timer_RetryLoadVanillaMaps);
+  }
+}
+
+void ScheduleUncompletedMapsRetry()
+{
+  if (g_UncompletedMapsRetryTimer == null)
+  {
+    g_UncompletedMapsRetryTimer = CreateTimer(LOAD_RETRY_DELAY, Timer_RetryLoadUncompletedMaps);
+  }
+}
+
+public Action Timer_RetryLoadVanillaMaps(Handle timer)
+{
+  g_VanillaMapsRetryTimer = null;
   LoadVanillaMaps();
+  return Plugin_Stop;
+}
+
+public Action Timer_RetryLoadUncompletedMaps(Handle timer)
+{
+  g_UncompletedMapsRetryTimer = null;
   LoadUncompletedMaps();
+  return Plugin_Stop;
 }
 
 public Action OnVanillaTierCmd(int client, int args)
@@ -165,6 +195,7 @@ void LoadVanillaMaps()
   Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, mapsUrl);
   if (request == null)
   {
+    ScheduleVanillaMapsRetry();
     return;
   }
 
@@ -174,6 +205,8 @@ void LoadVanillaMaps()
   if (!sent)
   {
     LogError("maps request could not be made.");
+    delete request;
+    ScheduleVanillaMapsRetry();
     return;
   }
 }
@@ -226,6 +259,7 @@ void LoadUncompletedMaps()
   Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, mapsUrl);
   if (request == null)
   {
+    ScheduleUncompletedMapsRetry();
     return;
   }
 
@@ -235,6 +269,8 @@ void LoadUncompletedMaps()
   if (!sent)
   {
     LogError("Uncompleted maps request could not be made.");
+    delete request;
+    ScheduleUncompletedMapsRetry();
     return;
   }
 }
