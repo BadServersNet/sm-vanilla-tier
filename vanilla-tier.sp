@@ -35,6 +35,11 @@ enum struct UncompletedMap
 VanillaMap     g_VanillaMaps[2048];
 UncompletedMap g_UncompletedMaps[2048];
 
+int  g_VanillaMapCount;
+int  g_UncompletedMapCount;
+bool g_VanillaMapsLoaded;
+bool g_UncompletedMapsLoaded;
+
 public void OnPluginStart()
 {
   RegConsoleCmd("sm_vnltier", OnVanillaTierCmd, "Show the map's vanilla tier.");
@@ -71,17 +76,17 @@ public Action OnVanillaTierCmd(int client, int args)
 
 int GetVanillaMapIndexByName(char[] mapName)
 {
-  for (int i = 0; i < sizeof(g_VanillaMaps); i++)
+  for (int i = 0; i < g_VanillaMapCount; i++)
   {
-    if (StrContains(g_VanillaMaps[i].name, mapName) == 0)
+    if (StrContains(g_VanillaMaps[i].name, mapName, false) == 0)
     {
       return i;
     }
   }
 
-  for (int i = 0; i < sizeof(g_VanillaMaps); i++)
+  for (int i = 0; i < g_VanillaMapCount; i++)
   {
-    if (StrContains(g_VanillaMaps[i].name, mapName) != -1)
+    if (StrContains(g_VanillaMaps[i].name, mapName, false) != -1)
     {
       return i;
     }
@@ -98,6 +103,8 @@ void ClearVanillaMaps()
   {
     g_VanillaMaps[i] = empty;
   }
+
+  g_VanillaMapCount = 0;
 }
 
 void ClearUncompletedMaps()
@@ -108,21 +115,23 @@ void ClearUncompletedMaps()
   {
     g_UncompletedMaps[i] = empty;
   }
+
+  g_UncompletedMapCount = 0;
 }
 
 int GetUncompletedMapIndexByName(char[] mapName)
 {
-  for (int i = 0; i < sizeof(g_UncompletedMaps); i++)
+  for (int i = 0; i < g_UncompletedMapCount; i++)
   {
-    if (StrContains(g_UncompletedMaps[i].name, mapName) == 0)
+    if (StrContains(g_UncompletedMaps[i].name, mapName, false) == 0)
     {
       return i;
     }
   }
 
-  for (int i = 0; i < sizeof(g_UncompletedMaps); i++)
+  for (int i = 0; i < g_UncompletedMapCount; i++)
   {
-    if (StrContains(g_UncompletedMaps[i].name, mapName) != -1)
+    if (StrContains(g_UncompletedMaps[i].name, mapName, false) != -1)
     {
       return i;
     }
@@ -133,6 +142,12 @@ int GetUncompletedMapIndexByName(char[] mapName)
 
 void OutputMapTierInfoIfFound(int client, char[] mapName)
 {
+  if (!g_VanillaMapsLoaded || !g_UncompletedMapsLoaded)
+  {
+    ReplyToCommand(client, "%s Tier data is still loading. Try again in a moment.", CHAT_PREFIX);
+    return;
+  }
+
   int vanillaMapIndex = GetVanillaMapIndexByName(mapName);
   if (vanillaMapIndex != -1)
   {
@@ -169,6 +184,7 @@ void LoadVanillaMaps()
   if (!sent)
   {
     LogError("maps request could not be made.");
+    delete request;
     return;
   }
 }
@@ -178,20 +194,46 @@ public int OnVanillaMapsRequestComplete(Handle hRequest, bool bFailure, bool bRe
   int status = view_as<int>(eStatusCode);
   if (bFailure || !bRequestSuccessful || status >= 300)
   {
-    LogError("Failed pushing info, status: %d", eStatusCode);
+    LogError("maps request failed, status: %d", status);
+    delete hRequest;
+    return 0;
+  }
+
+  int bodySize;
+  if (!SteamWorks_GetHTTPResponseBodySize(hRequest, bodySize) || bodySize <= 0)
+  {
+    LogError("maps response had no body.");
+    delete hRequest;
+    return 0;
+  }
+
+  char[] body = new char[bodySize + 1];
+  if (!SteamWorks_GetHTTPResponseBodyData(hRequest, body, bodySize + 1))
+  {
+    LogError("maps response body could not be read.");
+    delete hRequest;
+    return 0;
+  }
+  body[bodySize] = '\0';
+
+  JSON_Array vanillaMaps = view_as<JSON_Array>(json_decode(body));
+  if (vanillaMaps == null)
+  {
+    char jsonError[256];
+    json_get_last_error(jsonError, sizeof(jsonError));
+    LogError("maps response could not be decoded as JSON: %s", jsonError);
+    delete hRequest;
+    return 0;
+  }
+
+  int length = vanillaMaps.Length;
+  if (length > sizeof(g_VanillaMaps))
+  {
+    LogError("maps response has %d records, but only %d can be stored.", length, sizeof(g_VanillaMaps));
+    length = sizeof(g_VanillaMaps);
   }
 
   ClearVanillaMaps();
-
-  int bodySize;
-  SteamWorks_GetHTTPResponseBodySize(hRequest, bodySize);
-
-  char body[256000];
-  SteamWorks_GetHTTPResponseBodyData(hRequest, body, bodySize);
-
-  JSON_Array vanillaMaps = view_as<JSON_Array>(json_decode(body));
-
-  int length = vanillaMaps.Length;
 
   for (int i = 0; i < length; i++)
   {
@@ -206,6 +248,9 @@ public int OnVanillaMapsRequestComplete(Handle hRequest, bool bFailure, bool bRe
 
     g_VanillaMaps[i] = vanillaMap;
   }
+
+  g_VanillaMapCount = length;
+  g_VanillaMapsLoaded = true;
 
   json_cleanup_and_delete(vanillaMaps);
   delete hRequest;
@@ -230,6 +275,7 @@ void LoadUncompletedMaps()
   if (!sent)
   {
     LogError("Uncompleted maps request could not be made.");
+    delete request;
     return;
   }
 }
@@ -239,32 +285,61 @@ public int OnUncompletedMapsRequestComplete(Handle hRequest, bool bFailure, bool
   int status = view_as<int>(eStatusCode);
   if (bFailure || !bRequestSuccessful || status >= 300)
   {
-    LogError("Failed pushing info, status: %d", eStatusCode);
+    LogError("Uncompleted maps request failed, status: %d", status);
+    delete hRequest;
+    return 0;
+  }
+
+  int bodySize;
+  if (!SteamWorks_GetHTTPResponseBodySize(hRequest, bodySize) || bodySize <= 0)
+  {
+    LogError("Uncompleted maps response had no body.");
+    delete hRequest;
+    return 0;
+  }
+
+  char[] body = new char[bodySize + 1];
+  if (!SteamWorks_GetHTTPResponseBodyData(hRequest, body, bodySize + 1))
+  {
+    LogError("Uncompleted maps response body could not be read.");
+    delete hRequest;
+    return 0;
+  }
+  body[bodySize] = '\0';
+
+  JSON_Array vanillaMaps = view_as<JSON_Array>(json_decode(body));
+  if (vanillaMaps == null)
+  {
+    char jsonError[256];
+    json_get_last_error(jsonError, sizeof(jsonError));
+    LogError("Uncompleted maps response could not be decoded as JSON: %s", jsonError);
+    delete hRequest;
+    return 0;
+  }
+
+  int length = vanillaMaps.Length;
+  if (length > sizeof(g_UncompletedMaps))
+  {
+    LogError("Uncompleted maps response has %d records, but only %d can be stored.", length, sizeof(g_UncompletedMaps));
+    length = sizeof(g_UncompletedMaps);
   }
 
   ClearUncompletedMaps();
-
-  int bodySize;
-  SteamWorks_GetHTTPResponseBodySize(hRequest, bodySize);
-
-  char body[256000];
-  SteamWorks_GetHTTPResponseBodyData(hRequest, body, bodySize);
-
-  JSON_Array vanillaMaps = view_as<JSON_Array>(json_decode(body));
-
-  int length = vanillaMaps.Length;
 
   for (int i = 0; i < length; i++)
   {
     JSON_Object map = vanillaMaps.GetObject(i);
 
     UncompletedMap uncompletedMap;
-    uncompletedMap.id = map.GetInt("id");
+    uncompletedMap.id = map.GetInt("map_id");
     map.GetString("map_name", uncompletedMap.name, sizeof(uncompletedMap.name));
     uncompletedMap.kztTier = map.GetInt("kztTier");
 
     g_UncompletedMaps[i] = uncompletedMap;
   }
+
+  g_UncompletedMapCount = length;
+  g_UncompletedMapsLoaded = true;
 
   json_cleanup_and_delete(vanillaMaps);
   delete hRequest;
