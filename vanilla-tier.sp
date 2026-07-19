@@ -4,6 +4,8 @@
 
 #define API_HOST    "https://vnlkz.com/api"
 #define CHAT_PREFIX "[\x0Evnlkz.com\x01]"
+#define MAX_HTTP_BODY_SIZE 524288
+#define LOAD_RETRY_DELAY 10.0
 
 #pragma newdecls required
 
@@ -34,11 +36,17 @@ enum struct UncompletedMap
 
 VanillaMap     g_VanillaMaps[2048];
 UncompletedMap g_UncompletedMaps[2048];
+char           g_ResponseBody[MAX_HTTP_BODY_SIZE];
 
 int  g_VanillaMapCount;
 int  g_UncompletedMapCount;
 bool g_VanillaMapsLoaded;
 bool g_UncompletedMapsLoaded;
+bool g_VanillaMapsLoading;
+bool g_UncompletedMapsLoading;
+
+Handle g_VanillaMapsRetryTimer;
+Handle g_UncompletedMapsRetryTimer;
 
 public void OnPluginStart()
 {
@@ -142,39 +150,108 @@ int GetUncompletedMapIndexByName(char[] mapName)
 
 void OutputMapTierInfoIfFound(int client, char[] mapName)
 {
-  if (!g_VanillaMapsLoaded || !g_UncompletedMapsLoaded)
+  if (!g_VanillaMapsLoaded && !g_UncompletedMapsLoaded)
   {
     ReplyToCommand(client, "%s Tier data is still loading. Try again in a moment.", CHAT_PREFIX);
     return;
   }
 
-  int vanillaMapIndex = GetVanillaMapIndexByName(mapName);
-  if (vanillaMapIndex != -1)
+  if (g_VanillaMapsLoaded)
   {
-    ReplyToCommand(client, "%s %s", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].name);
-    ReplyToCommand(client, "%s \x10VNL NUB: \x01%d", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].tpTier);
-    ReplyToCommand(client, "%s \x0BVNL PRO: \x01%d", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].proTier);
-    return;
+    int vanillaMapIndex = GetVanillaMapIndexByName(mapName);
+    if (vanillaMapIndex != -1)
+    {
+      ReplyToCommand(client, "%s %s", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].name);
+      ReplyToCommand(client, "%s \x10VNL NUB: \x01%d", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].tpTier);
+      ReplyToCommand(client, "%s \x0BVNL PRO: \x01%d", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].proTier);
+      return;
+    }
   }
 
-  int uncompletedMapIndex = GetUncompletedMapIndexByName(mapName);
-  if (uncompletedMapIndex != -1)
+  if (g_UncompletedMapsLoaded)
   {
-    ReplyToCommand(client, "%s %s is not possible on vanilla.", CHAT_PREFIX, g_UncompletedMaps[uncompletedMapIndex].name);
+    int uncompletedMapIndex = GetUncompletedMapIndexByName(mapName);
+    if (uncompletedMapIndex != -1)
+    {
+      ReplyToCommand(client, "%s %s is not possible on vanilla.", CHAT_PREFIX, g_UncompletedMaps[uncompletedMapIndex].name);
+      return;
+    }
+  }
+
+  if (!g_VanillaMapsLoaded || !g_UncompletedMapsLoaded)
+  {
+    ReplyToCommand(client, "%s %s was not found in the loaded data. Some tier data is still loading.", CHAT_PREFIX, mapName);
     return;
   }
 
   ReplyToCommand(client, "%s %s was not found.", CHAT_PREFIX, mapName);
 }
 
+void ScheduleVanillaMapsRetry()
+{
+  if (!g_VanillaMapsLoaded && g_VanillaMapsRetryTimer == null)
+  {
+    g_VanillaMapsRetryTimer = CreateTimer(LOAD_RETRY_DELAY, Timer_RetryLoadVanillaMaps);
+  }
+}
+
+void ScheduleUncompletedMapsRetry()
+{
+  if (!g_UncompletedMapsLoaded && g_UncompletedMapsRetryTimer == null)
+  {
+    g_UncompletedMapsRetryTimer = CreateTimer(LOAD_RETRY_DELAY, Timer_RetryLoadUncompletedMaps);
+  }
+}
+
+public Action Timer_RetryLoadVanillaMaps(Handle timer)
+{
+  g_VanillaMapsRetryTimer = null;
+
+  if (!g_VanillaMapsLoaded)
+  {
+    LoadVanillaMaps();
+  }
+
+  return Plugin_Stop;
+}
+
+public Action Timer_RetryLoadUncompletedMaps(Handle timer)
+{
+  g_UncompletedMapsRetryTimer = null;
+
+  if (!g_UncompletedMapsLoaded)
+  {
+    LoadUncompletedMaps();
+  }
+
+  return Plugin_Stop;
+}
+
 void LoadVanillaMaps()
 {
+  if (g_VanillaMapsLoading)
+  {
+    return;
+  }
+
+  if (!SteamWorks_IsLoaded())
+  {
+    LogError("SteamWorks is not loaded yet; retrying maps request soon.");
+    ScheduleVanillaMapsRetry();
+    return;
+  }
+
+  g_VanillaMapsLoading = true;
+
   char mapsUrl[128];
   Format(mapsUrl, sizeof(mapsUrl), "%s/maps", API_HOST);
 
   Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, mapsUrl);
   if (request == null)
   {
+    g_VanillaMapsLoading = false;
+    LogError("maps request could not be created.");
+    ScheduleVanillaMapsRetry();
     return;
   }
 
@@ -184,7 +261,9 @@ void LoadVanillaMaps()
   if (!sent)
   {
     LogError("maps request could not be made.");
+    g_VanillaMapsLoading = false;
     delete request;
+    ScheduleVanillaMapsRetry();
     return;
   }
 }
@@ -195,7 +274,9 @@ public int OnVanillaMapsRequestComplete(Handle hRequest, bool bFailure, bool bRe
   if (bFailure || !bRequestSuccessful || status >= 300)
   {
     LogError("maps request failed, status: %d", status);
+    g_VanillaMapsLoading = false;
     delete hRequest;
+    ScheduleVanillaMapsRetry();
     return 0;
   }
 
@@ -203,26 +284,40 @@ public int OnVanillaMapsRequestComplete(Handle hRequest, bool bFailure, bool bRe
   if (!SteamWorks_GetHTTPResponseBodySize(hRequest, bodySize) || bodySize <= 0)
   {
     LogError("maps response had no body.");
+    g_VanillaMapsLoading = false;
     delete hRequest;
+    ScheduleVanillaMapsRetry();
     return 0;
   }
 
-  char[] body = new char[bodySize + 1];
-  if (!SteamWorks_GetHTTPResponseBodyData(hRequest, body, bodySize + 1))
+  if (bodySize >= sizeof(g_ResponseBody))
+  {
+    LogError("maps response is %d bytes, but only %d bytes can be read.", bodySize, sizeof(g_ResponseBody) - 1);
+    g_VanillaMapsLoading = false;
+    delete hRequest;
+    ScheduleVanillaMapsRetry();
+    return 0;
+  }
+
+  if (!SteamWorks_GetHTTPResponseBodyData(hRequest, g_ResponseBody, sizeof(g_ResponseBody)))
   {
     LogError("maps response body could not be read.");
+    g_VanillaMapsLoading = false;
     delete hRequest;
+    ScheduleVanillaMapsRetry();
     return 0;
   }
-  body[bodySize] = '\0';
+  g_ResponseBody[bodySize] = '\0';
 
-  JSON_Array vanillaMaps = view_as<JSON_Array>(json_decode(body));
+  JSON_Array vanillaMaps = view_as<JSON_Array>(json_decode(g_ResponseBody));
   if (vanillaMaps == null)
   {
     char jsonError[256];
     json_get_last_error(jsonError, sizeof(jsonError));
     LogError("maps response could not be decoded as JSON: %s", jsonError);
+    g_VanillaMapsLoading = false;
     delete hRequest;
+    ScheduleVanillaMapsRetry();
     return 0;
   }
 
@@ -251,6 +346,7 @@ public int OnVanillaMapsRequestComplete(Handle hRequest, bool bFailure, bool bRe
 
   g_VanillaMapCount = length;
   g_VanillaMapsLoaded = true;
+  g_VanillaMapsLoading = false;
 
   json_cleanup_and_delete(vanillaMaps);
   delete hRequest;
@@ -260,12 +356,29 @@ public int OnVanillaMapsRequestComplete(Handle hRequest, bool bFailure, bool bRe
 
 void LoadUncompletedMaps()
 {
+  if (g_UncompletedMapsLoading)
+  {
+    return;
+  }
+
+  if (!SteamWorks_IsLoaded())
+  {
+    LogError("SteamWorks is not loaded yet; retrying Uncompleted maps request soon.");
+    ScheduleUncompletedMapsRetry();
+    return;
+  }
+
+  g_UncompletedMapsLoading = true;
+
   char mapsUrl[128];
   Format(mapsUrl, sizeof(mapsUrl), "%s/uncompleted", API_HOST);
 
   Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, mapsUrl);
   if (request == null)
   {
+    g_UncompletedMapsLoading = false;
+    LogError("Uncompleted maps request could not be created.");
+    ScheduleUncompletedMapsRetry();
     return;
   }
 
@@ -275,7 +388,9 @@ void LoadUncompletedMaps()
   if (!sent)
   {
     LogError("Uncompleted maps request could not be made.");
+    g_UncompletedMapsLoading = false;
     delete request;
+    ScheduleUncompletedMapsRetry();
     return;
   }
 }
@@ -286,7 +401,9 @@ public int OnUncompletedMapsRequestComplete(Handle hRequest, bool bFailure, bool
   if (bFailure || !bRequestSuccessful || status >= 300)
   {
     LogError("Uncompleted maps request failed, status: %d", status);
+    g_UncompletedMapsLoading = false;
     delete hRequest;
+    ScheduleUncompletedMapsRetry();
     return 0;
   }
 
@@ -294,26 +411,40 @@ public int OnUncompletedMapsRequestComplete(Handle hRequest, bool bFailure, bool
   if (!SteamWorks_GetHTTPResponseBodySize(hRequest, bodySize) || bodySize <= 0)
   {
     LogError("Uncompleted maps response had no body.");
+    g_UncompletedMapsLoading = false;
     delete hRequest;
+    ScheduleUncompletedMapsRetry();
     return 0;
   }
 
-  char[] body = new char[bodySize + 1];
-  if (!SteamWorks_GetHTTPResponseBodyData(hRequest, body, bodySize + 1))
+  if (bodySize >= sizeof(g_ResponseBody))
+  {
+    LogError("Uncompleted maps response is %d bytes, but only %d bytes can be read.", bodySize, sizeof(g_ResponseBody) - 1);
+    g_UncompletedMapsLoading = false;
+    delete hRequest;
+    ScheduleUncompletedMapsRetry();
+    return 0;
+  }
+
+  if (!SteamWorks_GetHTTPResponseBodyData(hRequest, g_ResponseBody, sizeof(g_ResponseBody)))
   {
     LogError("Uncompleted maps response body could not be read.");
+    g_UncompletedMapsLoading = false;
     delete hRequest;
+    ScheduleUncompletedMapsRetry();
     return 0;
   }
-  body[bodySize] = '\0';
+  g_ResponseBody[bodySize] = '\0';
 
-  JSON_Array vanillaMaps = view_as<JSON_Array>(json_decode(body));
+  JSON_Array vanillaMaps = view_as<JSON_Array>(json_decode(g_ResponseBody));
   if (vanillaMaps == null)
   {
     char jsonError[256];
     json_get_last_error(jsonError, sizeof(jsonError));
     LogError("Uncompleted maps response could not be decoded as JSON: %s", jsonError);
+    g_UncompletedMapsLoading = false;
     delete hRequest;
+    ScheduleUncompletedMapsRetry();
     return 0;
   }
 
@@ -340,6 +471,7 @@ public int OnUncompletedMapsRequestComplete(Handle hRequest, bool bFailure, bool
 
   g_UncompletedMapCount = length;
   g_UncompletedMapsLoaded = true;
+  g_UncompletedMapsLoading = false;
 
   json_cleanup_and_delete(vanillaMaps);
   delete hRequest;
