@@ -2,8 +2,8 @@
 #include <sourcemod>
 #include <SteamWorks>
 
-#define API_HOST    "https://vnl.kz/api"
-#define CHAT_PREFIX "[\x0Evnl.kz\x01]"
+#define API_HOST    "https://vnlkz.com/api"
+#define CHAT_PREFIX "[\x0Evnlkz.com\x01]"
 
 #pragma newdecls required
 
@@ -11,7 +11,7 @@ public Plugin myinfo =
 {
   name        = "Vanilla Tier Plugin",
   author      = "BuSheeZy",
-  description = "Show tier information for vanilla maps. (vnl.kz)",
+  description = "Show tier information for vanilla maps. (vnlkz.com)",
   version     = "1.0.0",
   url         = "https://BadServers.net"
 };
