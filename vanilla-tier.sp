@@ -248,6 +248,7 @@ void OutputMapTierInfoIfFound(int client, char[] mapName)
     ReplyToCommand(client, "%s %s", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].name);
     ReplyToCommand(client, "%s \x10VNL NUB: \x01%d", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].tpTier);
     ReplyToCommand(client, "%s \x0BVNL PRO: \x01%d", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].proTier);
+     
     if (strlen(g_VanillaMaps[vanillaMapIndex].notes) > 0)
     {
       ReplyToCommand(client, "%s \x0CNotes: \x01%s", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].notes);
@@ -259,9 +260,10 @@ void OutputMapTierInfoIfFound(int client, char[] mapName)
   if (uncompletedMapIndex != -1)
   {
     ReplyToCommand(client, "%s %s is not possible on vanilla.", CHAT_PREFIX, g_UncompletedMaps[uncompletedMapIndex].name);
+
     if (strlen(g_UncompletedMaps[uncompletedMapIndex].notes) > 0)
     {
-      ReplyToCommand(client, "%s %s", CHAT_PREFIX, g_UncompletedMaps[uncompletedMapIndex].notes);
+      ReplyToCommand(client, "%s \x0CNotes: \x01%s", CHAT_PREFIX, g_UncompletedMaps[uncompletedMapIndex].notes);
     }
     return;
   }
