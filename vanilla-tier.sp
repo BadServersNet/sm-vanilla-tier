@@ -24,6 +24,7 @@ enum struct VanillaMap
   int  kztTier;
   int  proTier;
   int  tpTier;
+  char notes[512];
 }
 
 enum struct UncompletedMap
@@ -162,6 +163,83 @@ int GetUncompletedMapIndexByName(char[] mapName)
   return -1;
 }
 
+void SanitizeHtmlFromNotes(char[] notes, int maxLength)
+{
+  if (maxLength <= 0)
+  {
+    return;
+  }
+
+  bool inTag        = false;
+  bool lastWasSpace = true;
+  int  writeIndex = 0;
+
+  for (int readIndex = 0; readIndex < maxLength && notes[readIndex] != '\0'; readIndex++)
+  {
+    char currentChar = notes[readIndex];
+
+    if (currentChar == '<')
+    {
+      inTag = true;
+
+      if (!lastWasSpace && writeIndex < maxLength - 1)
+      {
+        notes[writeIndex++] = ' ';
+        lastWasSpace = true;
+      }
+
+      continue;
+    }
+
+    if (inTag)
+    {
+      if (currentChar == '>')
+      {
+        inTag = false;
+      }
+
+      continue;
+    }
+
+    if (currentChar == '\r' || currentChar == '\n' || currentChar == '\t')
+    {
+      currentChar = ' ';
+    }
+
+    if (currentChar == ' ')
+    {
+      if (lastWasSpace)
+      {
+        continue;
+      }
+
+      lastWasSpace = true;
+    }
+    else
+    {
+      lastWasSpace = false;
+    }
+
+    if (writeIndex >= maxLength - 1)
+    {
+      break;
+    }
+
+    notes[writeIndex++] = currentChar;
+  }
+
+  notes[writeIndex] = '\0';
+  TrimString(notes);
+
+  ReplaceString(notes, maxLength, "&nbsp;", " ", false);
+  ReplaceString(notes, maxLength, "&amp;", "&", false);
+  ReplaceString(notes, maxLength, "&lt;", "<", false);
+  ReplaceString(notes, maxLength, "&gt;", ">", false);
+  ReplaceString(notes, maxLength, "&quot;", "\"", false);
+  ReplaceString(notes, maxLength, "&#39;", "'", false);
+  ReplaceString(notes, maxLength, "&apos;", "'", false);
+}
+
 void OutputMapTierInfoIfFound(int client, char[] mapName)
 {
   int vanillaMapIndex = GetVanillaMapIndexByName(mapName);
@@ -170,6 +248,10 @@ void OutputMapTierInfoIfFound(int client, char[] mapName)
     ReplyToCommand(client, "%s %s", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].name);
     ReplyToCommand(client, "%s \x10VNL NUB: \x01%d", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].tpTier);
     ReplyToCommand(client, "%s \x0BVNL PRO: \x01%d", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].proTier);
+    if (strlen(g_VanillaMaps[vanillaMapIndex].notes) > 0)
+    {
+      ReplyToCommand(client, "%s \x0CNotes: \x01%s", CHAT_PREFIX, g_VanillaMaps[vanillaMapIndex].notes);
+    }
     return;
   }
 
@@ -241,6 +323,8 @@ public int OnVanillaMapsRequestComplete(Handle hRequest, bool bFailure, bool bRe
     vanillaMap.kztTier = map.GetInt("kztTier");
     vanillaMap.proTier = map.GetInt("proTier");
     vanillaMap.tpTier  = map.GetInt("tpTier");
+    map.GetString("notes", vanillaMap.notes, sizeof(vanillaMap.notes));
+    SanitizeHtmlFromNotes(vanillaMap.notes, sizeof(vanillaMap.notes));
 
     g_VanillaMaps[i] = vanillaMap;
   }
@@ -304,6 +388,7 @@ public int OnUncompletedMapsRequestComplete(Handle hRequest, bool bFailure, bool
     map.GetString("map_name", uncompletedMap.name, sizeof(uncompletedMap.name));
     uncompletedMap.kztTier = map.GetInt("kztTier");
     map.GetString("notes", uncompletedMap.notes, sizeof(uncompletedMap.notes));
+    SanitizeHtmlFromNotes(uncompletedMap.notes, sizeof(uncompletedMap.notes));
 
     g_UncompletedMaps[i] = uncompletedMap;
   }
