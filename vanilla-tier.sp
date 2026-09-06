@@ -8,12 +8,14 @@
 
 #pragma newdecls required
 
+#define PLUGIN_VERSION "1.0.1"
+
 public Plugin myinfo =
 {
   name        = "Vanilla Tier Plugin",
   author      = "BuSheeZy",
   description = "Show tier information for vanilla maps. (vnlkz.com)",
-  version     = "1.0.1",
+  version     = PLUGIN_VERSION,
   url         = "https://BadServers.net"
 };
 
