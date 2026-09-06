@@ -13,7 +13,7 @@ public Plugin myinfo =
   name        = "Vanilla Tier Plugin",
   author      = "BuSheeZy",
   description = "Show tier information for vanilla maps. (vnlkz.com)",
-  version     = "1.0.0",
+  version     = "1.0.1",
   url         = "https://BadServers.net"
 };
 
