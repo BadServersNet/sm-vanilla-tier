@@ -178,33 +178,13 @@ void SanitizeHtmlFromNotes(char[] notes, int maxLength)
   {
     char currentChar = notes[readIndex];
 
-    if (currentChar == '<')
+    bool consumed = ConsumeHtmlTag(currentChar, inTag, lastWasSpace, notes, maxLength, writeIndex);
+    if (consumed)
     {
-      inTag = true;
-
-      if (!lastWasSpace && writeIndex < maxLength - 1)
-      {
-        notes[writeIndex++] = ' ';
-        lastWasSpace = true;
-      }
-
       continue;
     }
 
-    if (inTag)
-    {
-      if (currentChar == '>')
-      {
-        inTag = false;
-      }
-
-      continue;
-    }
-
-    if (currentChar == '\r' || currentChar == '\n' || currentChar == '\t')
-    {
-      currentChar = ' ';
-    }
+    currentChar = NormalizeNoteWhitespace(currentChar);
 
     if (currentChar == ' ')
     {
@@ -297,21 +277,15 @@ void LoadVanillaMaps()
 
 public int OnVanillaMapsRequestComplete(Handle hRequest, bool bFailure, bool bRequestSuccessful, EHTTPStatusCode eStatusCode)
 {
-  int status = view_as<int>(eStatusCode);
-  if (bFailure || !bRequestSuccessful || status >= 300)
+  JSON_Array vanillaMaps = ReadMapResponse(hRequest, bFailure, bRequestSuccessful, eStatusCode, sizeof(g_VanillaMaps));
+  delete hRequest;
+  if (vanillaMaps == null)
   {
-    LogError("Failed pushing info, status: %d", eStatusCode);
+    ScheduleVanillaMapsRetry();
+    return 0;
   }
 
   ClearVanillaMaps();
-
-  int bodySize;
-  SteamWorks_GetHTTPResponseBodySize(hRequest, bodySize);
-
-  char body[256000];
-  SteamWorks_GetHTTPResponseBodyData(hRequest, body, bodySize);
-
-  JSON_Array vanillaMaps = view_as<JSON_Array>(json_decode(body));
 
   int length = vanillaMaps.Length;
 
@@ -332,7 +306,6 @@ public int OnVanillaMapsRequestComplete(Handle hRequest, bool bFailure, bool bRe
   }
 
   json_cleanup_and_delete(vanillaMaps);
-  delete hRequest;
 
   return 0;
 }
@@ -363,21 +336,15 @@ void LoadUncompletedMaps()
 
 public int OnUncompletedMapsRequestComplete(Handle hRequest, bool bFailure, bool bRequestSuccessful, EHTTPStatusCode eStatusCode)
 {
-  int status = view_as<int>(eStatusCode);
-  if (bFailure || !bRequestSuccessful || status >= 300)
+  JSON_Array vanillaMaps = ReadMapResponse(hRequest, bFailure, bRequestSuccessful, eStatusCode, sizeof(g_UncompletedMaps));
+  delete hRequest;
+  if (vanillaMaps == null)
   {
-    LogError("Failed pushing info, status: %d", eStatusCode);
+    ScheduleUncompletedMapsRetry();
+    return 0;
   }
 
   ClearUncompletedMaps();
-
-  int bodySize;
-  SteamWorks_GetHTTPResponseBodySize(hRequest, bodySize);
-
-  char body[256000];
-  SteamWorks_GetHTTPResponseBodyData(hRequest, body, bodySize);
-
-  JSON_Array vanillaMaps = view_as<JSON_Array>(json_decode(body));
 
   int length = vanillaMaps.Length;
 
@@ -396,7 +363,114 @@ public int OnUncompletedMapsRequestComplete(Handle hRequest, bool bFailure, bool
   }
 
   json_cleanup_and_delete(vanillaMaps);
-  delete hRequest;
 
   return 0;
+}
+
+bool ConsumeHtmlTag(char character, bool &inTag, bool &lastWasSpace, char[] notes, int maxLength, int &writeIndex)
+{
+  if (character == '<')
+  {
+    inTag = true;
+    if (!lastWasSpace && writeIndex < maxLength - 1)
+    {
+      notes[writeIndex++] = ' ';
+      lastWasSpace = true;
+    }
+    return true;
+  }
+  if (!inTag)
+  {
+    return false;
+  }
+  if (character == '>')
+  {
+    inTag = false;
+  }
+  return true;
+}
+
+char NormalizeNoteWhitespace(char character)
+{
+  if (character == '\r' || character == '\n' || character == '\t')
+  {
+    return ' ';
+  }
+  return character;
+}
+
+JSON_Array ReadMapResponse(Handle request, bool failure, bool successful, EHTTPStatusCode statusCode, int maxMaps)
+{
+  int status = view_as<int>(statusCode);
+  if (failure || !successful || status < 200 || status >= 300)
+  {
+    LogError("Map API request failed. status=%d", status);
+    return null;
+  }
+
+  int bodySize;
+  if (!SteamWorks_GetHTTPResponseBodySize(request, bodySize))
+  {
+    LogError("Could not read map API response size.");
+    return null;
+  }
+  if (bodySize <= 0 || bodySize >= 256000)
+  {
+    LogError("Map API response has an invalid size: %d", bodySize);
+    return null;
+  }
+
+  int bufferSize = bodySize + 1;
+  char[] body = new char[bufferSize];
+  if (!SteamWorks_GetHTTPResponseBodyData(request, body, bodySize))
+  {
+    LogError("Could not read map API response body.");
+    return null;
+  }
+  body[bodySize] = '\0';
+  JSON_Object decoded = json_decode(body);
+  bool valid = IsValidMapArray(decoded, maxMaps);
+  if (!valid)
+  {
+    json_cleanup_and_delete(decoded);
+    LogError("Map API response must be an array of at most %d map objects.", maxMaps);
+    return null;
+  }
+  return view_as<JSON_Array>(decoded);
+}
+
+bool IsValidMapArray(JSON_Object decoded, int maxMaps)
+{
+  if (decoded == null)
+  {
+    return false;
+  }
+  if (!decoded.IsArray)
+  {
+    return false;
+  }
+  JSON_Array maps = view_as<JSON_Array>(decoded);
+  int count = maps.Length;
+  if (count > maxMaps)
+  {
+    return false;
+  }
+  for (int i = 0; i < count; i++)
+  {
+    JSONCellType type = maps.GetType(i);
+    if (type != JSON_Type_Object)
+    {
+      return false;
+    }
+    JSON_Object map = maps.GetObject(i);
+    if (map == null)
+    {
+      return false;
+    }
+    if (map.IsArray)
+    {
+      return false;
+    }
+  }
+  return true;
 }
