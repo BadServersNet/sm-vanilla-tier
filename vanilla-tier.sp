@@ -91,7 +91,8 @@ public Action OnVanillaTierCmd(int client, int args)
     char currentMapName[128];
     GetCurrentMap(currentMapName, sizeof(currentMapName));
 
-    OutputMapTierInfoIfFound(client, currentMapName);
+    int slash = FindCharInString(currentMapName, '/', true);
+    OutputMapTierInfoIfFound(client, currentMapName[slash + 1]);
 
     return Plugin_Handled;
   }
