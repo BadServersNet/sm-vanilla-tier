@@ -7,8 +7,9 @@
 #define LOAD_RETRY_DELAY 5.0
 
 #pragma newdecls required
+#pragma dynamic 262144
 
-#define PLUGIN_VERSION "1.0.2"
+#define PLUGIN_VERSION "1.0.3"
 
 public Plugin myinfo =
 {
