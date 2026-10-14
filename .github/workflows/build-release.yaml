@@ -57,6 +57,7 @@ jobs:
             cp "${SOURCE_DIR}/${plugin}.sp" build/addons/sourcemod/scripting/
           done
           cp -R "${SOURCE_DIR}/include/." build/addons/sourcemod/scripting/include/
+          cp LICENSE build/
 
       - name: Upload build
         uses: actions/upload-artifact@v4

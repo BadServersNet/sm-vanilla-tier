@@ -9,7 +9,7 @@
 #pragma newdecls required
 #pragma dynamic 262144
 
-#define PLUGIN_VERSION "1.0.4"
+#define PLUGIN_VERSION "1.0.5"
 
 public Plugin myinfo =
 {
